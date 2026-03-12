@@ -46,7 +46,7 @@ import pandas as pd
 # ---------------------------------------------------------------------
 # USER INPUTS
 # ---------------------------------------------------------------------
-INPUT_FILE = Path(r"C:\add\your\path\Supplementary File 3.xlsx")
+INPUT_FILE = Path(r"C:\add\your\path\Supplementary File 4.xlsx")
 SHEET_NAME = "Fig 9a"
 
 OUTPUT_DIR = Path(r"C:\add\your\output-path\test")
