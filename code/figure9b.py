@@ -7,7 +7,7 @@ Plots MAGEMin model output from Figure 9b on the unfolded basalt tetrahedron.
 
 Input
 -----
-Supplementary File 3
+Supplementary File 4
 Sheet: Fig 9b
 
 Expected columns
@@ -46,7 +46,7 @@ import pandas as pd
 # ---------------------------------------------------------------------
 # USER INPUTS
 # ---------------------------------------------------------------------
-INPUT_FILE = Path(r"C:\add\your\path\Supplementary File 3")
+INPUT_FILE = Path(r"C:\add\your\path\Supplementary File 4")
 SHEET_NAME = "Fig 9b"
 
 OUTPUT_DIR = Path(r"C:\add\your\output-path\test")
