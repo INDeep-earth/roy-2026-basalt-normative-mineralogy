@@ -7,7 +7,7 @@ Plots MAGEMin model output from Figure 9a on the unfolded basalt tetrahedron.
 
 Input
 -----
-Supplementary File 3
+Supplementary File 4
 Sheet: Fig 9a
 
 Expected columns
