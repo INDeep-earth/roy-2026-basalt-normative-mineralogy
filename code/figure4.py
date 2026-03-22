@@ -1,51 +1,48 @@
 """
-Figure 4 plotting script for Roy et al. (2026)
+figure4.py — Roy et al. (2026), Communications Earth & Environment
 
-Purpose
--------
-Generates unfolded basalt tetrahedron (Thompson 1984) plots for each tectonic setting from
-Supplementary File 1, using the sheet:
+Generates unfolded basalt tetrahedron (Thompson 1984) plots for each tectonic
+setting in the Phanerozoic dataset (GEOROC - PhanZ Filtered sheet of
+Supplementary Data 1).
 
-    GEOROC - PhanZ Filtered
+One PDF is saved per tectonic setting.
 
 Input
 -----
-Excel workbook containing normative mineral proportions and tectonic setting
-information.
+Supplementary Data 1 (Figshare: https://doi.org/10.6084/m9.figshare.30386002)
+  Sheet: GEOROC - PhanZ Filtered
 
-Expected sheet
---------------
-GEOROC - PhanZ Filtered
-
-Expected columns
+Required columns
 ----------------
-Required:
-- TECTONIC SETTING
-- Quartz_%wt
-- Hypersthene_%wt
-- Olivine_%wt
-- Nepheline_%wt
-- Diopside_%wt
+  TECTONIC SETTING
+  Quartz_%wt, Hypersthene_%wt, Olivine_%wt, Nepheline_%wt, Diopside_%wt
 
-Optional:
-- Leucite_%wt
-- Kaliophilite_%wt
-- normative_name
-
-Output
-------
-One PDF per tectonic setting, saved to the output directory.
+Optional columns (set to 0 if absent)
+--------------------------------------
+  Leucite_%wt, Kaliophilite_%wt
 
 Notes
 -----
-- If 'normative_name' is absent, it is estimated from normative mineral fields.
-- Nepheline-combined field is calculated as:
-      Nepheline + Leucite + Kaliophilite
+  - The combined nepheline field plotted on the Ne apex is:
+        Ne_combo = Nepheline + Leucite + Kaliophilite
+  - normative_name is used if present; otherwise it is estimated from the
+    non-zero normative mineral fields.
+
+Reference
+---------
+  Thompson, R. N. (1984). Dispatches from the basalt front.
+  Proceedings of the Geologists' Association, 95(3), 249–262.
+  http://dx.doi.org/10.1016/S0016-7878(84)80011-5
+
+Citation
+--------
+  Roy, S., Kamber, B. S., Hayman, P. C. & Murphy, D. T. (2026).
+  Tectonic setting and mantle source evolution reconstructed from deep time
+  analysis of basalt geochemistry. Communications Earth & Environment.
 """
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -54,351 +51,262 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+# ---------------------------------------------------------------------------
+# USER CONFIGURATION — update these two paths before running
+# ---------------------------------------------------------------------------
+INPUT_FILE = Path(r"C:\path\to\Supplementary Data 1.xlsx")
+OUTPUT_DIR = Path(r"C:\path\to\output\figure4")
 
-# ---------------------------------------------------------------------
-# USER INPUTS
-# ---------------------------------------------------------------------
-INPUT_FILE = Path(r"C:\add\your\path\Supplementary File 1.xlsx")
 SHEET_NAME = "GEOROC - PhanZ Filtered"
-OUTPUT_DIR = Path(r"C:\add\your\path\Test")
+
+# ---------------------------------------------------------------------------
+# COLUMN RESOLUTION — tolerant matching for known variants
+# ---------------------------------------------------------------------------
+_COLUMN_CANDIDATES: dict[str, list[str]] = {
+    "Quartz_%wt":        ["Quartz_%wt", "Quartz %wt", "Quartz", "quartz", "Q"],
+    "Hypersthene_%wt":   ["Hypersthene_%wt", "Hypersthene %wt", "Hypersthene", "hypersthene", "Hy"],
+    "Olivine_%wt":       ["Olivine_%wt", "Olivine %wt", "Olivine", "olivine", "Ol"],
+    "Nepheline_%wt":     ["Nepheline_%wt", "Nepheline %wt", "Nepheline", "nepheline", "Ne"],
+    "Diopside_%wt":      ["Diopside_%wt", "Diopside %wt", "Diopside", "diopside", "Di"],
+    "Leucite_%wt":       ["Leucite_%wt", "Leucite %wt", "Leucite", "leucite", "Lc"],
+    "Kaliophilite_%wt":  ["Kaliophilite_%wt", "Kaliophilite %wt", "Kaliophilite", "kaliophilite",
+                          "Kalsilite_%wt", "Kalsilite %wt", "Kalsilite", "kalsilite", "Kls"],
+}
+
+# Ternary apices in Cartesian space (unfolded tetrahedron geometry)
+_H = np.sqrt(3) / 2
+_NE  = (0.0, _H)
+_OL  = (0.5, 0.0)
+_DI  = (1.0, _H)
+_HY  = (1.5, 0.0)
+_QZ  = (2.0, _H)
 
 
-# ---------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # HELPERS
-# ---------------------------------------------------------------------
-def read_excel_safely(path: Path, sheet: str) -> pd.DataFrame:
-    """Read an Excel sheet safely with helpful error messages."""
-    try:
-        xl = pd.ExcelFile(path, engine="openpyxl")
-        if sheet not in xl.sheet_names:
-            raise KeyError(
-                f"Sheet '{sheet}' not found. Available sheets: {', '.join(xl.sheet_names)}"
-            )
-        df = pd.read_excel(path, sheet_name=sheet, engine="openpyxl")
-        print(
-            f"Loaded: {path.name} | sheet='{sheet}' | rows={len(df):,}, cols={len(df.columns)}"
-        )
-        return df
-    except Exception as exc:
-        raise RuntimeError(f"Failed to read Excel file '{path}' sheet '{sheet}': {exc}") from exc
+# ---------------------------------------------------------------------------
 
-
-def normalise_key(text: str) -> str:
-    """Normalise column names for robust matching."""
+def _norm_key(text: str) -> str:
+    """Strip non-alphanumeric characters and lowercase for fuzzy matching."""
     return re.sub(r"[^a-z0-9]", "", str(text).lower())
 
 
-def get_col(df: pd.DataFrame, target: str, candidates: list[str] | None = None) -> str | None:
-    """Return the best-matching column name from a list of candidates."""
-    if candidates is None:
-        candidates = [target]
-
-    lower_map = {col.lower(): col for col in df.columns}
-    norm_map = {normalise_key(col): col for col in df.columns}
-
+def _resolve_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    """Return the first matching DataFrame column from a list of candidates."""
+    lower_map = {c.lower(): c for c in df.columns}
+    norm_map  = {_norm_key(c): c for c in df.columns}
     for cand in candidates:
         if cand.lower() in lower_map:
             return lower_map[cand.lower()]
-
     for cand in candidates:
-        key = normalise_key(cand)
-        if key in norm_map:
-            return norm_map[key]
-
+        if _norm_key(cand) in norm_map:
+            return norm_map[_norm_key(cand)]
     return None
 
 
-def sanitize_filename(name: str) -> str:
-    """Make a safe output filename."""
+def _sanitise_filename(name: str, max_len: int = 150) -> str:
+    """Return a filesystem-safe version of *name*."""
     name = re.sub(r'[\\/*?:"<>|]', "_", str(name))
     name = re.sub(r"\s+", "_", name.strip())
-    return name[:150]
+    return name[:max_len]
 
 
-def ternary_to_cartesian(
-    a: pd.Series,
-    b: pd.Series,
-    c: pd.Series,
-    point_a: tuple[float, float],
-    point_b: tuple[float, float],
-    point_c: tuple[float, float],
+def _ternary_to_cartesian(
+    a: pd.Series, b: pd.Series, c: pd.Series,
+    pa: tuple[float, float], pb: tuple[float, float], pc: tuple[float, float],
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Convert ternary proportions to Cartesian coordinates."""
-    x = a * point_a[0] + b * point_b[0] + c * point_c[0]
-    y = a * point_a[1] + b * point_b[1] + c * point_c[1]
+    """Convert barycentric (ternary) coordinates to 2-D Cartesian."""
+    x = a * pa[0] + b * pb[0] + c * pc[0]
+    y = a * pa[1] + b * pb[1] + c * pc[1]
     return x.to_numpy(), y.to_numpy()
 
 
-def row_normalise(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise rows to unit sum."""
+def _row_normalise(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise each row so that selected columns sum to 1."""
     if df.empty:
         return df
     row_sums = df.sum(axis=1)
     df = df[row_sums > 0]
-    out = df.div(row_sums[row_sums > 0], axis=0)
-    return out.dropna(how="any")
+    return df.div(row_sums[row_sums > 0], axis=0).dropna(how="any")
 
 
-def classify_normative_type(row: pd.Series) -> str | pd.NA:
-    """
-    Estimate normative_name if not present.
-
-    Logic follows the three basalt fields:
-    - quartz_normative
-    - olivine_normative
-    - nepheline_normative
-    """
-    q = row["Quartz_%wt"]
-    h = row["Hypersthene_%wt"]
-    o = row["Olivine_%wt"]
-    n = row["Nepheline_%wt"]
-
+def _classify_normative(row: pd.Series) -> str | float:
+    """Infer normative_name from non-zero mineral fields when the column is absent."""
+    q, h = row["Quartz_%wt"], row["Hypersthene_%wt"]
+    o, n = row["Olivine_%wt"], row["Nepheline_%wt"]
     if pd.notna(q) and q > 0 and pd.notna(h) and h > 0:
         return "quartz_normative"
     if pd.notna(o) and o > 0 and pd.notna(h) and h > 0:
         return "olivine_normative"
     if pd.notna(n) and n > 0 and pd.notna(o) and o > 0:
         return "nepheline_normative"
-
-    return pd.NA
-
-
-# ---------------------------------------------------------------------
-# COLUMN RESOLUTION
-# ---------------------------------------------------------------------
-TARGETS = {
-    "Quartz_%wt": [
-        "Quartz_%wt", "Quartz %wt", "Quartz", "quartz", "Q"
-    ],
-    "Hypersthene_%wt": [
-        "Hypersthene_%wt", "Hypersthene %wt", "Hypersthene", "hypersthene", "Hy", "hy"
-    ],
-    "Olivine_%wt": [
-        "Olivine_%wt", "Olivine %wt", "Olivine", "olivine", "Ol", "ol"
-    ],
-    "Nepheline_%wt": [
-        "Nepheline_%wt", "Nepheline %wt", "Nepheline", "nepheline", "Ne", "ne"
-    ],
-    "Diopside_%wt": [
-        "Diopside_%wt", "Diopside %wt", "Diopside", "diopside", "Di", "di"
-    ],
-    "Leucite_%wt": [
-        "Leucite_%wt", "Leucite %wt", "Leucite", "leucite", "Lc", "lc"
-    ],
-    "Kaliophilite_%wt": [
-        "Kaliophilite_%wt", "Kaliophilite %wt", "Kaliophilite", "kaliophilite",
-        "Kalsilite_%wt", "Kalsilite %wt", "Kalsilite", "kalsilite", "Kls", "kls"
-    ],
-}
-
-MIN_COLS_NEEDED = {
-    "ne_combo": "Ne_combo_%wt",
-    "olivine": "Olivine_%wt",
-    "diopside": "Diopside_%wt",
-    "hypersthene": "Hypersthene_%wt",
-    "quartz": "Quartz_%wt",
-}
+    return float("nan")
 
 
-# ---------------------------------------------------------------------
-# MAIN PLOTTING FUNCTION
-# ---------------------------------------------------------------------
-def plot_for_setting(
-    df_in: pd.DataFrame,
-    tectonic_setting_col: str,
+def _draw_tetrahedron(ax: plt.Axes) -> None:
+    """Draw the three-triangle unfolded tetrahedron outline and apex labels."""
+    for tri in [
+        [_NE, _OL, _DI, _NE],
+        [_OL, _DI, _HY, _OL],
+        [_DI, _HY, _QZ, _DI],
+    ]:
+        xs, ys = zip(*tri)
+        ax.plot(xs, ys, "k-", linewidth=1)
+
+    labels = [
+        (_NE, "Ne", "center", 0.05),
+        (_OL, "Ol", "center", -0.05),
+        (_DI, "Di", "center", 0.05),
+        (_HY, "Hy", "center", -0.05),
+        (_QZ, "Qz", "center", 0.05),
+    ]
+    for (x, y), label, ha, dy in labels:
+        ax.text(x, y + dy, label, fontsize=12, ha=ha, fontweight="bold")
+
+
+# ---------------------------------------------------------------------------
+# PER-SETTING PLOT
+# ---------------------------------------------------------------------------
+
+def _plot_setting(
+    df: pd.DataFrame,
+    tectonic_col: str,
     normative_col: str,
-    setting_value: str,
+    setting: str,
     output_dir: Path,
 ) -> bool:
-    """Generate one Figure 4 panel for a single tectonic setting."""
-    sub = df_in[df_in[tectonic_setting_col].astype(str) == str(setting_value)].copy()
-
+    sub = df[df[tectonic_col].astype(str) == setting].copy()
     if sub.empty:
-        print(f"[skip] No data for: {setting_value}")
+        print(f"  [skip] No data for: {setting}")
         return False
 
-    needed = [normative_col] + list(MIN_COLS_NEEDED.values())
-    for col in needed:
-        if col not in sub.columns:
-            print(f"[skip] {setting_value}: missing column '{col}'")
-            return False
+    required = ["Ne_combo_%wt", "Olivine_%wt", "Diopside_%wt", "Hypersthene_%wt", "Quartz_%wt"]
+    if any(col not in sub.columns for col in [normative_col] + required):
+        print(f"  [skip] {setting}: missing required columns")
+        return False
 
-    numeric = sub[list(MIN_COLS_NEEDED.values())].apply(pd.to_numeric, errors="coerce")
+    numeric = sub[required].apply(pd.to_numeric, errors="coerce")
     sub = pd.concat([sub[[normative_col]], numeric], axis=1)
 
-    ne_combo = MIN_COLS_NEEDED["ne_combo"]
-    olivine = MIN_COLS_NEEDED["olivine"]
-    diopside = MIN_COLS_NEEDED["diopside"]
-    hypersthene = MIN_COLS_NEEDED["hypersthene"]
-    quartz = MIN_COLS_NEEDED["quartz"]
+    left   = sub[sub[normative_col] == "nepheline_normative"][["Ne_combo_%wt", "Olivine_%wt",  "Diopside_%wt"]].dropna()
+    middle = sub[sub[normative_col] == "olivine_normative"]  [["Olivine_%wt",  "Diopside_%wt", "Hypersthene_%wt"]].dropna()
+    right  = sub[sub[normative_col] == "quartz_normative"]   [["Diopside_%wt", "Hypersthene_%wt", "Quartz_%wt"]].dropna()
 
-    left = sub[sub[normative_col] == "nepheline_normative"][[ne_combo, olivine, diopside]].dropna()
-    middle = sub[sub[normative_col] == "olivine_normative"][[olivine, diopside, hypersthene]].dropna()
-    right = sub[sub[normative_col] == "quartz_normative"][[diopside, hypersthene, quartz]].dropna()
+    left_n, middle_n, right_n = _row_normalise(left), _row_normalise(middle), _row_normalise(right)
 
-    left_n = row_normalise(left)
-    middle_n = row_normalise(middle)
-    right_n = row_normalise(right)
-
-    h = np.sqrt(3) / 2
-    ne = (0.0, h)
-    di = (1.0, h)
-    qz = (2.0, h)
-    ol = (0.5, 0.0)
-    hy = (1.5, 0.0)
-
-    def to_xy(df_three: pd.DataFrame, p1, p2, p3) -> tuple[np.ndarray, np.ndarray]:
-        if df_three.empty:
+    def to_xy(d, p1, p2, p3):
+        if d.empty:
             return np.array([]), np.array([])
-        return ternary_to_cartesian(
-            df_three.iloc[:, 0], df_three.iloc[:, 1], df_three.iloc[:, 2], p1, p2, p3
-        )
+        return _ternary_to_cartesian(d.iloc[:, 0], d.iloc[:, 1], d.iloc[:, 2], p1, p2, p3)
 
-    x_left, y_left = to_xy(left_n, ne, ol, di)
-    x_mid, y_mid = to_xy(middle_n, ol, di, hy)
-    x_right, y_right = to_xy(right_n, di, hy, qz)
+    x_l, y_l = to_xy(left_n,   _NE, _OL, _DI)
+    x_m, y_m = to_xy(middle_n, _OL, _DI, _HY)
+    x_r, y_r = to_xy(right_n,  _DI, _HY, _QZ)
 
-    all_x = np.concatenate([x_left, x_mid, x_right]) if (x_left.size + x_mid.size + x_right.size) else np.array([])
-    all_y = np.concatenate([y_left, y_mid, y_right]) if (y_left.size + x_mid.size + x_right.size) else np.array([])
+    all_x = np.concatenate([x_l, x_m, x_r])
+    all_y = np.concatenate([y_l, y_m, y_r])
 
     if all_x.size == 0:
-        print(f"[skip] {setting_value}: no points to plot")
+        print(f"  [skip] {setting}: no plottable points")
         return False
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    n_points = len(all_x)
-    ax.text(1.98, h + 0.06, f"n={n_points}", fontsize=9, ha="right")
 
-    if x_left.size:
-        ax.scatter(
-            x_left, y_left, s=12, alpha=0.7,
-            facecolor="gray", edgecolor="black", linewidth=0.2,
-            label="Ne (Ne+Lc+Kp) Normative"
-        )
-    if x_mid.size:
-        ax.scatter(
-            x_mid, y_mid, s=12, alpha=0.7,
-            facecolor="gray", edgecolor="black", linewidth=0.2,
-            label="Olivine Normative"
-        )
-    if x_right.size:
-        ax.scatter(
-            x_right, y_right, s=12, alpha=0.7,
-            facecolor="gray", edgecolor="black", linewidth=0.2,
-            label="Quartz Normative"
-        )
-
-    ax.plot([ne[0], ol[0], di[0], ne[0]], [ne[1], ol[1], di[1], ne[1]], "k-", lw=1)
-    ax.plot([ol[0], di[0], hy[0], ol[0]], [ol[1], di[1], hy[1], ol[1]], "k-", lw=1)
-    ax.plot([di[0], hy[0], qz[0], di[0]], [di[1], hy[1], qz[1], di[1]], "k-", lw=1)
+    for xs, ys, label in [
+        (x_l, y_l, "Ne-normative (Ne+Lc+Kp)"),
+        (x_m, y_m, "Ol-normative"),
+        (x_r, y_r, "Qz-normative"),
+    ]:
+        if xs.size:
+            ax.scatter(xs, ys, s=12, alpha=0.7, facecolor="gray",
+                       edgecolor="black", linewidth=0.2, label=label)
 
     if all_x.size > 2:
-        sns.kdeplot(
-            x=all_x, y=all_y, cmap="RdYlBu_r", fill=True,
-            ax=ax, alpha=0.45, thresh=0.1
-        )
-        sns.kdeplot(
-            x=all_x, y=all_y, color="white",
-            linewidths=0.4, ax=ax
-        )
+        sns.kdeplot(x=all_x, y=all_y, cmap="RdYlBu_r", fill=True, ax=ax, alpha=0.45, thresh=0.1)
+        sns.kdeplot(x=all_x, y=all_y, color="white", linewidths=0.4, ax=ax)
 
-    ax.text(ne[0], ne[1] + 0.05, "Ne", fontsize=12, ha="center", fontweight="bold")
-    ax.text(ol[0], ol[1] - 0.05, "Ol", fontsize=12, ha="center", fontweight="bold")
-    ax.text(di[0], di[1] + 0.05, "Di", fontsize=12, ha="center", fontweight="bold")
-    ax.text(hy[0], hy[1] - 0.05, "Hy", fontsize=12, ha="center", fontweight="bold")
-    ax.text(qz[0], qz[1] + 0.05, "Qz", fontsize=12, ha="center", fontweight="bold")
-
-    ax.set_xticks([])
-    ax.set_yticks([])
+    _draw_tetrahedron(ax)
+    ax.text(1.98, _H + 0.06, f"n={all_x.size}", fontsize=9, ha="right")
+    ax.set_title(setting, fontsize=13)
+    ax.set_xticks([]); ax.set_yticks([])
     ax.set_frame_on(False)
-    ax.set_xlim(-0.1, 2.1)
-    ax.set_ylim(-0.1, h + 0.12)
-    ax.set_title(setting_value, fontsize=13)
+    ax.set_xlim(-0.1, 2.1); ax.set_ylim(-0.1, _H + 0.12)
 
     handles, labels = ax.get_legend_handles_labels()
     if handles:
         ax.legend(handles, labels, loc="upper left", fontsize=8, frameon=False)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = sanitize_filename(setting_value)
-    out_path = output_dir / f"{safe_name}.pdf"
+    out_path = output_dir / f"{_sanitise_filename(setting)}.pdf"
     plt.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close()
-
-    print(f"Saved: {out_path}")
+    print(f"  Saved: {out_path.name}")
     return True
 
 
-# ---------------------------------------------------------------------
-# WORKFLOW
-# ---------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------------------------
+
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    df_plot = read_excel_safely(INPUT_FILE, SHEET_NAME)
+    if not INPUT_FILE.is_file():
+        raise FileNotFoundError(f"Input file not found:\n  {INPUT_FILE}")
+
+    print(f"Reading: {INPUT_FILE.name}  (sheet='{SHEET_NAME}')")
+    xl = pd.ExcelFile(INPUT_FILE, engine="openpyxl")
+    if SHEET_NAME not in xl.sheet_names:
+        raise KeyError(f"Sheet '{SHEET_NAME}' not found. Available: {xl.sheet_names}")
+    df = xl.parse(SHEET_NAME)
+    print(f"  {len(df):,} rows, {len(df.columns)} columns")
 
     # Clean column names
-    df_plot.columns = (
-        df_plot.columns.astype(str)
+    df.columns = (
+        df.columns.astype(str)
         .str.replace("\ufeff", "", regex=True)
         .str.replace("\xa0", " ", regex=False)
         .str.strip()
     )
 
-    # Resolve expected columns
-    resolved: dict[str, str | None] = {}
-    for outcol, candidates in TARGETS.items():
-        resolved[outcol] = get_col(df_plot, outcol, candidates)
-
-    for outcol, src in resolved.items():
+    # Resolve and coerce normative mineral columns
+    for target, candidates in _COLUMN_CANDIDATES.items():
+        src = _resolve_column(df, candidates)
         if src is None:
-            if outcol in ("Leucite_%wt", "Kaliophilite_%wt"):
-                df_plot[outcol] = 0.0
-                print(f"Note: '{outcol}' not found; assuming 0.0 for plotting.")
+            if target in ("Leucite_%wt", "Kaliophilite_%wt"):
+                df[target] = 0.0
+                print(f"  Note: '{target}' not found — assumed 0.")
             else:
-                raise KeyError(f"Missing required column '{outcol}' (tried {TARGETS[outcol]})")
+                raise KeyError(f"Required column '{target}' not found. Tried: {candidates}")
         else:
-            df_plot[outcol] = pd.to_numeric(df_plot[src], errors="coerce")
+            df[target] = pd.to_numeric(df[src], errors="coerce")
 
-    # Combined nepheline field
-    df_plot["Ne_combo_%wt"] = (
-        df_plot["Nepheline_%wt"].fillna(0)
-        + df_plot["Leucite_%wt"].fillna(0)
-        + df_plot["Kaliophilite_%wt"].fillna(0)
+    # Combined Ne apex
+    df["Ne_combo_%wt"] = (
+        df["Nepheline_%wt"].fillna(0)
+        + df["Leucite_%wt"].fillna(0)
+        + df["Kaliophilite_%wt"].fillna(0)
     )
 
-    tectonic_setting_col = get_col(
-        df_plot,
-        "TECTONIC SETTING",
-        ["TECTONIC SETTING", "Tectonic Setting", "tectonic setting"]
-    )
-    if tectonic_setting_col is None:
-        raise KeyError("Column 'TECTONIC SETTING' not found in the dataset.")
+    # Tectonic setting column
+    tectonic_col = _resolve_column(df, ["TECTONIC SETTING", "Tectonic Setting", "tectonic setting"])
+    if tectonic_col is None:
+        raise KeyError("Column 'TECTONIC SETTING' not found.")
 
-    normative_col = get_col(
-        df_plot,
-        "normative_name",
-        ["normative_name", "Normative_Name", "normative name"]
-    )
-
+    # normative_name column (or derive it)
+    normative_col = _resolve_column(df, ["normative_name", "Normative_Name", "normative name"])
     if normative_col is None:
-        df_plot["normative_name"] = df_plot.apply(classify_normative_type, axis=1).astype("string")
+        print("  Note: 'normative_name' column absent — inferring from mineral fields.")
+        df["normative_name"] = df.apply(_classify_normative, axis=1).astype("string")
         normative_col = "normative_name"
 
-    settings = df_plot[tectonic_setting_col].dropna().astype(str).unique()
+    settings = sorted(df[tectonic_col].dropna().astype(str).unique())
+    print(f"\nGenerating plots for {len(settings)} tectonic setting(s):\n")
 
-    saved = 0
-    for setting in sorted(settings):
-        if plot_for_setting(
-            df_in=df_plot,
-            tectonic_setting_col=tectonic_setting_col,
-            normative_col=normative_col,
-            setting_value=setting,
-            output_dir=OUTPUT_DIR,
-        ):
-            saved += 1
-
-    print(f"\nDone. Saved {saved} plot(s) to: {OUTPUT_DIR}")
+    saved = sum(
+        _plot_setting(df, tectonic_col, normative_col, s, OUTPUT_DIR)
+        for s in settings
+    )
+    print(f"\nDone — {saved}/{len(settings)} plots saved to:\n  {OUTPUT_DIR}")
 
 
 if __name__ == "__main__":
