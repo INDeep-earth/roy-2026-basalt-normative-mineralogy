@@ -1,6 +1,9 @@
 # Tectonic setting and mantle source evolution reconstructed from deep time analysis of basalt geochemistry
+
 **Shubhadeep Roy, Balz S. Kamber, Patrick C. Hayman, David T. Murphy**
+
 *Communications Earth & Environment* (2026)
+
 [![DOI](https://img.shields.io/badge/DOI-10.1038%2Fs43247--026--03473--4-blue)](https://doi.org/10.1038/s43247-026-03473-4)
 
 ---
