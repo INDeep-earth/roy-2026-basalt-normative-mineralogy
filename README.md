@@ -121,7 +121,7 @@ Each script prints progress to the terminal and saves output PDFs to `OUTPUT_DIR
 
 If you use these scripts or data in your work, please cite:
 
-> Roy, S., Kamber, B. S., Hayman, P. C. & Murphy, D. T. (2026). Tectonic setting and mantle source evolution reconstructed from deep time analysis of basalt geochemistry. *Communications Earth & Environment*. https://doi.org/[DOI to be added at publication]
+> Roy, S., Kamber, B.S., Hayman, P.C. et al. Tectonic setting and mantle source evolution reconstructed from deep time analysis of basalt geochemistry. Commun Earth Environ (2026). https://doi.org/10.1038/s43247-026-03473-4
 
 Data citation:
 
